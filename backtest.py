@@ -120,7 +120,7 @@ class backtest():
         print("")
         print("kurtosis","\n",portfolio.kurtosis())
         print("")
-        print("sharpe ratio","\n", portfolio.mean() / portfolio.std())
+        print("sharpe ratio","\n", ((1+portfolio).prod()-1) / (portfolio.std()*np.sqrt(len(portfolio))))
         print(f'누적 수익률 {(1+portfolio).prod()}')
         
         
