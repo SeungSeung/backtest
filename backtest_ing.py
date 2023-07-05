@@ -1,298 +1,264 @@
-import pandas as pd
 import numpy as np
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-import seaborn as sns
-import statsmodels.api as sm
-from numba import jit
+import pandas as pd
+import scipy as sp
+from numba import njit
+import datetime
 import plotly.express as px
-import warnings
-warnings.filterwarnings('ignore')
 
 
 
-class backtest():
-    
-    def __init__(self,start,end,data,fee=0,bm=None,factor1=None,factor2=None):
-        self.start=start
-        self.end=end
-        self.bm=bm
+
+
+class simple_backtset():
+    def __init__(self, data,start,end,fee=0.005):
         
+        self.start=pd.to_datetime(start)
+        self.end=pd.to_datetime(end)
+        self.temp_data=data.loc[(data['date']>=self.start)&(data['date']<=self.end)]
         self.fee=fee
-        self.data=data
+
+    def get_position(self, **cond):
+        """
         
+        ----------
+        Params :
+        upper_Condition = condition[0] 상한 이거보다 작아야 진입
+        longer_Condition = condition[1] 하한 이거보다 커야 진입 
+        Is_Short_Strg? (T or F) = condition[2] 공매도 전략 여부
+        Enter_Weight  = condition[3] 초기 투자 비중
         
-    def cleaning_data(self):
-        backtest_data=self.data.copy()
-        ###data 차지하는 용량이 너무 큼 삭제
-        self.data=0
-        ###날짜 맞추기
-        backtest_data=backtest_data.loc[(backtest_data['date']>=self.start)&(backtest_data['date']<=self.end)]
+        Holding_Period(days) = condition[4] 보유기간
+        Enter_Lag time(days) = condition[5]  신호 후 며칠 후 진입인지
         
-        ###외부상장 종목 제거
-        backtest_data=backtest_data.loc[(backtest_data['market']!='외감') & (backtest_data['market']!='KONEX')]
+        ----------
+        **cond : LIST
+        """
+        ###외부 시장 및 코넥스 제거
+        self.temp_data=self.temp_data.loc[(self.temp_data['market']!='외감') & (self.temp_data['market']!='KONEX')]
         ###거래정지 종목 제거
-        backtest_data=backtest_data.loc[backtest_data['trading_suspension']!=1]
+        self.temp_data=self.temp_data.loc[self.temp_data['trading_suspension']!=1]
         ##상장종목수 0인거 제거
-        backtest_data['listed_stocks'].fillna(0,inplace=True)
-        backtest_data=backtest_data.loc[backtest_data['listed_stocks']!=0]
+        self.temp_data['listed_stocks'].fillna(0,inplace=True)
+        self.temp_data=self.temp_data.loc[self.temp_data['listed_stocks']!=0]
+        self.temp_data['rtn']=np.log(self.temp_data.groupby('code').adj_close.shift(0)/self.temp_data.groupby('code').adj_close.shift(1))   
+        self.temp_data['rtn_1']=self.temp_data.groupby('code').rtn.shift(1)
+        ###혹시나 모를 오류 제거, 상한가 하한가 30% 이상 차이나는 종목들 제거
+        self.temp_data=self.temp_data.loc[(self.temp_data['rtn']<=0.3) & (self.temp_data['rtn']>=-0.3)]
         
         
-        self.close=pd.pivot_table(backtest_data[['date','code','price']],index='date',values='bprice',columns=['code'],aggfunc='first')
-        self.market_cap=pd.pivot_table(backtest_data[['date','code','market_cap']],index='date',values='market_cap',columns=['code'],aggfunc='first')
-        
-        try:
-            self.position=pd.pivot_table(backtest_data[['date','code','position']],index='date',values='position',columns=['code'],aggfunc='first')
-        except Exception as e:
-            print(e)
-            self.position=0
-            
-                
-            
-        if 'factor1' in backtest_data.columns and 'factor2' not in backtest_data.columns:
-            self.factor1=pd.pivot_table(backtest_data[['date','code','factor1']],index='date',values='factor1',columns=['code'],aggfunc='first')
-            return self.close, self.market_cap, self.position,self.factor1
-        
-        elif 'factor1' in backtest_data.columns and 'factor2' in backtest_data.columns:
-            self.factor1=pd.pivot_table(backtest_data[['date','code','factor1']],index='date',values='factor1',columns=['code'],aggfunc='first')
-            self.factor2=pd.pivot_table(backtest_data[['date','code','factor2']],index='date',values='factor2',columns=['code'],aggfunc='first')
-            return self.close, self.market_cap, self.position, self.factor1, self.factor2
-        
-        
-        else:       
-            return self.close, self.market_cap, self.position
-    
-    
-    def make_rtn(self):
-        self.rtn=self.close.pct_change()
-        self.rtn-self.rtn.iloc[1:]
-        month_end=[]
-        for i in range(len(self.close.index)-1):
-            temp=self.close.index[i]
-            temp2=self.close.index[i+1]
-            if str(temp)[5:7]!=str(temp2)[5:7]:
-                month_end.append(temp)
-        self.month_end=month_end
-        price_monthly=self.close.loc[month_end]
-
-        self.monthly_rtn=price_monthly.pct_change()
-        self.monthly_rtn=self.monthly_rtn.iloc[1:]
-        quarter=[month for month in month_end if str(month)[5:7] in ('3','6','9','12')]
-        price_quarterly=self.close.loc[quarter]
-        self.quarterly_rtn=price_quarterly.pct_change()
-        self.quarterly_rtn=self.quarterly_rtn.iloc[1:]
-        years=[year for year in quarter if str(quarter)[5:7]=='12']
-        price_yearly=self.close.loc[years]
-        self.yearly_rtn=price_yearly.pct_change()
-        self.yearly_rtn=self.yearly_rtn.iloc[1:]
-        
-        return self.rtn, self.monthly_rtn, self.quarterly_rtn, self.yearly_rtn
+        ####월말, 분기말 연말 날짜 구하기
+      
                 
         
-    def winsorizing_facotr(self,q,factor):
-        
-        #temp.clip(upper=temp.T.quantile(q=0.90, interpolation='nearest'),lower=temp.T.quantile(q=0.10, interpolation='nearest'),axis=0)
-        factor=factor.clip(upper=factor.quantile(q=q, interpolation='nearest',axis=1),lower=factor.quantile(q=100-q, interpolation='nearest',axis=1),axis=0)
-        return factor
-        
-        
-    
-    
-    #####signal matrix: 가로축 시간, 세로1 code(tickers), 세로2: signal_column
-    def make_position(self,signal,signal_column,long_cond,holding_days,short_cond=None,lev_cond=None,lev=1,num=1):
-        self.signal=signal[['code',signal_column]]
-        self.position=pd.DataFrame(index=self.signal.index,columns=self.signal.columns)
-        days=list(self.signal.index)
-        for i in range(len(days)-holding_days):
-            temp=self.signal.loc[days[i]]
-            temp2=temp.set_index('code')
-            for code in temp2.index:
-                if temp2.loc[code,signal_column]>long_cond*lev_cond:
-                    self.position.loc[days[i]:days[i+holding_days],code]=lev*num
-                elif temp2.loc[code,signal_column]>long_cond:
-                    self.position.loc[days[i]:days[i+holding_days],code]=num
-                elif temp2.loc[code,signal_column]<short_cond:
-                    self.position.loc[days[i]:days[i+holding_days],code]=-num
-                elif temp2.loc[code,signal_column]<short_cond*lev_cond:
-                    self.position.loc[days[i]:days[i+holding_days],code]=-num*lev
-        return self.position.fillna(0)
-    
-    
-    
-    def sorting_backtest(self,rebalance_rtn,p,q , width, daily_rtn,vw=True):
-        factor_df1=self.factor1.shift(1)
-        factor_df1=factor_df1.iloc[1:]
-        factor_df2=self.factor_df2.shift(1)
-        #market_cap=market_cap.reindex(rebalance_rtn.index)
-        market_cap=self.market_cap.loc[self.month_end].shift(1)
-        market_cap=market_cap.reindex(factor_df1.index)
-        rebalance_rtn=rebalance_rtn.reindex(factor_df1.index)
-        factor_df2=factor_df2.reindex(factor_df1.index)
-        monthly_cap=market_cap.reindex(factor_df1.index)
-        return_tickers=dict()
-        
-        
-        
-        #daily_rtn=daily_rtn.loc['2004-05':]
-        daily_index=list(daily_rtn.index)
-        # monthly_index=list(factor_df1.index)
-        
-        for i in tqdm(range(0,len(factor_df1))):
-            first_sort=factor_df1.iloc[i].dropna().rank(ascending=False,method='first')\
-                [(factor_df1.iloc[i].dropna().rank(ascending=False,method='first')>len(factor_df1.iloc[i])*(p-width))&\
-                (factor_df1.iloc[i].dropna().rank(ascending=False,method='first')<len(factor_df1.iloc[i])*p)].index.values
-            first_sort=list(first_sort)
-            second_sort=factor_df2[first_sort]
+        t=1
+        for factor, cond in cond.items():
+            factor=f"{factor}"
+            upper_cond=cond[0]
+            lower_cond=cond[1]
+            is_short=cond[2]
+            invest_ratio=cond[3]
+            holding_days=cond[4]
+            lag=cond[5]
+            position = -1 if (is_short is True) | (is_short == -1) | (is_short == "S") else 1
             
             
-            quantile=int(len(second_sort.iloc[i])*q)
             
+            
+            # ####월말, 분기말 연말 날짜 구하기
+            monthend=list()
+            if type(holding_days)==str:
+                days=sorted(list(set(self.temp_data['date'])))
         
+                for day in range(len(days)-1):
+                    if str(days[day])[5:7]!=str(days[day+1])[5:7]:
+                        monthend.append(days[day])
                 
-            stocks_selected=second_sort.iloc[i].dropna().rank(ascending=False,method='first')\
-                [(second_sort.iloc[i].dropna().rank(ascending=False,method='first')>int(len(second_sort.iloc[i])*(q-width)))&
-                (second_sort.iloc[i].dropna().rank(ascending=False,method='first')<quantile)].index.values
-                
-            start=daily_index.index(factor_df1.index[i-1])
-            if i!=1:
-                temp_daily=daily_rtn.loc[daily_index[start+1]:factor_df1.index[i]]
-            else:
-                temp_daily=daily_rtn.loc[:factor_df1.index[i-1]]
-            
-            if vw==True:
-                
-                cap=monthly_cap.iloc[i]
-                cap=cap.reindex(stocks_selected)
-                cap=cap.dropna()
-            
-                
-                for day in temp_daily.index:
-                    return_tickers[day] = \
-                    [[np.dot(daily_rtn.loc[day].reindex(cap.index).values, cap/np.sum(cap))], cap.index]
-            
-            
-            
-            else:
-                for day in temp_daily.index:
+                if holding_days in ['quarter', 'Q','q']:
+                    quarter_end=[]
+                    for day in monthend:
+                        if str(day)[5:7] in ['03','06','09','12']:
+                            quarter_end.append(day)
+                            
+                    monthend=quarter_end
+                else:
+                    year_end=[]
+                    for day in monthend:
+                        if str(day)[5:7] in ['12']:
+                            year_end.append(day)
+                            
+                    monthend=year_end
                     
-                    return_tickers[day] = \
-                [[np.dot(daily_rtn.loc[day].reindex(stocks_selected).values, np.array([1/len(stocks_selected) for i in range(len(stocks_selected))]))], stocks_selected]
-        
-        
-        
-        
-        return return_tickers
-    
-    
-
-
-    #@jit()
-    def run_backtest(self,mode='not_mkt'):
-        result=dict()
-        self.rtn=self.rtn.reindex(self.position.index)
-        ###거래비용이 있는 경우 사전의 포지션에서 거래비용 만큼 제한하고 계산    
-        
-        for i in tqdm(range(len(self.rtn)-1)):
-            
-            daily_rtn=self.rtn.iloc[i]
-            position=self.position.iloc[i+1]
-            position=position.loc[daily_rtn.index]
-            temp_position=self.position.iloc[i]
-            temp_position=temp_position.loc[position.index]
-
-            
-            stocks=[stock for stock in (position.index)]
-            position=pd.Series(position,index=stocks)
-            temp_position=pd.Series(temp_position,index=stocks)
-            
-            ###거래비용이 존재하는 경우####
-            if self.fee>0:
-                for code in temp_position.index:
-                    if position.loc[code] != temp_position.loc[code]:
-                        daily_rtn.loc[code]=daily_rtn.loc[code]-np.abs(position.loc[code]-temp_position.loc[code])*self.fee
-    
-            
-            if mode=='not_mkt':
-                rtn=np.dot(daily_rtn.values,position.values)/((np.sum([weight*position.value_counts()[weight] for weight in position.value_counts().keys()])))
-                result[self.rtn.index[i]]=[rtn,stocks]
+               
+              
                 
-         
-            elif mode=='mkt_cap':
-                cap=self.market_cap.iloc[i+1]
-                cap=cap.loc[daily_rtn.index]
-                stocks=[stock for stock in (cap.index)]
-                cap=cap*position
-                cap=pd.Series(cap,index=stocks)
-                rtn=np.dot(daily_rtn.values, np.array([cap.loc[i]/np.sum(cap) for i in cap.index]))
-                #result[self.rtn.index[i]]=[rtn,stocks]
-                result[self.rtn.index[i]]=[rtn,stocks]    
-        
-        
-        portfolio=pd.DataFrame([i[0] for i in result.values()],index=result.keys(),columns=['return']) 
-        if self.bm != None:
-            self.bm=np.log(self.bm/ self.bm.shift(1))
-            portfolio=pd.concat([portfolio,self.bm],axis=1)
-        return portfolio, result
-    
-    
-    def cum_chart(self,portfolio):
-        fig=px.line((1+portfolio).cumprod())
-        fig.show()
-        print(f'누적 수익률 {(1+portfolio).cumprod()}')
-
-        
-    def analysis(self,portfolio):
-        print("mean","\n",portfolio.mean())
-        print("")
-        print("std","\n",portfolio.std())
-        print("")
-        print("skewness","\n",portfolio.skew())
-        print("")
-        print("kurtosis","\n",portfolio.kurtosis())
-        print("")
-        print("sharpe ratio","\n", portfolio.mean() / portfolio.std())
-        print(f'누적 수익률 {(1+portfolio).prod()}')
-        
-        
+            ################################################
             
-    def mdd(self,portfolio):
-        cum=(1+portfolio).cumprod()*1000
-        arr_v = np.array(cum)
+            
+           
+            ####각각의 진입 시기만 남기기 
+            if (lower_cond is not None) & (upper_cond is not None):
+                     
+                sign_idx = np.where((self.temp_data[factor] >= lower_cond) & (self.temp_data[factor]< upper_cond),invest_ratio*position,0)
+                        
+            elif lower_cond is not None:
+                
+            
+                if (type(lower_cond) == int) | (type(lower_cond) == float):
+                    sign_idx = np.where((self.temp_data[factor] >= lower_cond),invest_ratio*position,0)
+                else:
+                    print("Lower Condition Error")
+                    sign_idx = None
+                
+            elif upper_cond is not None:
+                    
+                if (type(upper_cond) == int) | (type(upper_cond) == float):
+                    sign_idx = np.where((self.temp_data[factor] < upper_cond),invest_ratio*position,0)
+                else:
+                    print("Higher Condition Error")
+                    sign_idx = None
+                
+            else:
+                print("No Condition")
+                sign_idx = None
+
+            self.temp_data[f'factor_{t}']=sign_idx
+            
+              ###lagging 후진입
+            
+            self.temp_data[f'factor_{t}']=self.temp_data.groupby('code')[f'factor_{t}'].shift(lag)
+            ##보유기간이 일수로 정해져 있는경우
+            if type(holding_days)==int or  type(holding_days)==float:
+                self.temp_data[f'factor_{t}_clear']=self.temp_data.groupby('code')[f'factor_{t}'].shift(holding_days)
+                self.temp_data[f'factor_{t}_clear']=self.temp_data[f'factor_{t}_clear']*-1
+                self.temp_data[f'factor_{t}'].fillna(0,inplace=True)
+                self.temp_data[f'factor_{t}_clear'].fillna(0,inplace=True)
+                self.temp_data[f'pos_{t}']=self.temp_data[f'factor_{t}']+self.temp_data[f'factor_{t}_clear']
+            
+            ### 보유기간이 진입 후 한달, 3개월, 6개월, 1년인 경우
+            else:
+                self.temp_data_month=self.temp_data.set_index('date')
+                self.temp_data_month=self.temp_data_month.loc[monthend]
+                self.temp_data_month['factor_exit']=self.temp_data_month[f'factor_{t}'].groupby('code').shift(1)
+                self.temp_data[f'factor_{t}_clear']=self.temp_data_month['factor_exit']*-1
+                self.temp_data[f'factor_{t}'].fillna(0,inplace=True)
+                self.temp_data[f'factor_{t}_clear'].fillna(0,inplace=True)
+                self.temp_data[f'pos_{t}']=self.temp_data[f'factor_{t}']+self.temp_data[f'factor_{t}_clear']
+                
+                    
+                    
+                    
+                    
+            t+=1
+        ###포지션 만들기####
+        
+        factor_list=[col for col in self.temp_data.columns if col.startswith('pos')]
+        ###멅티전략 포지션 array 합치기, 상계처리
+        self.temp_data['position']=np.nansum(self.temp_data[factor_list],axis=1)
+            
+            
+            
+            
+            
+         
+  
+       
+            
+            
+            
+        daily_rtn=pd.pivot_table(self.temp_data[['date','code','rtn']],index='date',values='rtn',columns=['code'],aggfunc='first',dropna=False)
+        position=pd.pivot_table(self.temp_data[['date','code','position']],index='date',values='position',columns=['code'],aggfunc='first',dropna=False)
+        #position=position.shift(1)
+        position.fillna(0,inplace=True)
+        position=position.cumsum()
+        daily_rtn=daily_rtn.reindex(position.index)
+        
+        self.date_index=list(position.index)
+        #daily_rtn=daily_rtn.iloc[1:]
+        self.fee_matrix=(position.diff())*self.fee
+        self.position=np.nan_to_num(position.values)
+        self.daily_rtn=np.nan_to_num(daily_rtn.values)
+        self.fee_matrix=self.fee_matrix.values
+        
+        
+        
+        
+        return self.position, self.daily_rtn
+      
+        
+        
+        
+        
+        
+    @njit()
+    def simulation(self,fee=0.005,nav=1):
+  
+        
+        nav_signal=self.position.copy()
+        position_signal=self.position.copy()
+        #fee_matrix=np.diff(position_signal,axis=1)*fee
+
+        #nav_signal=nav_signal-(fee_matrix*np.sign(nav_signal))
+        nav_result=[np.float(nav)]
+        for i in range(len(position_signal)-1):    
+            nav_signal[i+1]+=np.abs(nav_signal[i])*self.daily_rtn[i]-np.nansum(np.abs(self.fee_matrix[i]))
+            nav+=np.nansum(nav_signal[i]*self.daily_rtn[i])-np.nansum(np.abs(self.fee_matrix[i]))
+            #print(np.nansum(nav_signal.iloc[i].fillna(0)*daily_rtn.iloc[i]))
+            nav_result.append(nav)
+        self.simple_result=nav_result
+            
+
+        return self.simple_result
+    
+    
+    
+    
+    def position_count(self):
+        num_list=[]
+        long_num_list=[]
+        short_num_list=[]
+        pos=pd.DataFrame(self.position,index=self.date_index)
+        for date in self.date_index:
+            temp=pos.loc[date]
+            num_list.append(len(temp.loc[temp!=0].dropna()))
+            long_num_list.append(len(temp.loc[temp>0].dropna()))
+            short_num_list.append(len(temp.loc[temp<0].dropna()))
+            
+        self.count_df=pd.DataFrame(index=self.date_index)
+        self.count_df['gross']=num_list
+        self.count_df['long']=long_num_list
+        self.count_df['short']=short_num_list
+        fig=px.line(self.count_df)
+        fig.show()
+        return self.count_df  
+    
+    
+    
+    
+    
+    
+    def analysis(self):
+        arr_v=np.array(self.simple_result)
         peak_lower = np.argmax(np.maximum.accumulate(arr_v) - arr_v)
         peak_upper = np.argmax(arr_v[:peak_lower])
-        return peak_upper, peak_lower, f'MDD: {(arr_v[peak_lower] - arr_v[peak_upper]) / arr_v[peak_upper]}'
-    
-    
-    
-        
-    def turnover(self,result):
-        
-        turn_over=dict()
-        include=dict()
-        exclude=dict()
-        for i in tqdm(range(1,len(result.keys()))):
-            sub=len([ x for x in list(result.values())[i][1] if x not in list(result.values())[i-1][1]] )
-            #print(f'교체비율: {sub/len( result[list(result.values())[i-1]][1])}')
-            #print('편입',[x for x in result[list(result.values())[i]][1] if x not in result[list(result.values())[i-1]][1]])
-            #print('퇴출',[x for x in result[list(result.values())[i-1]][1] if x not in result[list(result.values())[i]][1]])
-            turn_over[list(result.keys())[i]]=sub/len(list(result.values())[i-1][1])
-            include[list(result.keys())[i]]=[x for x in list(result.values())[i][1] if x not in list(result.values())[i-1][1]]
-            exclude[list(result.keys())[i]]=[x for x in list(result.values())[i-1][1] if x not in list(result.values())[i]][1]
-            
-        turn_over=pd.DataFrame(turn_over.values(),index=turn_over.values(),columns=['turn_over'])
-        #include=pd.DataFrame(include.values(),index=include.values(),columns=['include'])
-        #exclude=pd.DataFrame(exclude.values(),index=exclude.values(),columns=['exclude'])   
-        return turn_over, include, exclude
+        MDD=(arr_v[peak_lower] - arr_v[peak_upper]) / arr_v[peak_upper]
+        print(f"MDD: {MDD}")
+        rtn=(self.simple_result[-1])-1
+        ###연율화 수익률
+        rtn_annualy=(1+rtn)**(252/len(self.simple_result))-1
+      
+        ### 테스트 기간동안의 일일 총 평균 투자비중(gross 투자 비중)
+        mean_invest_ratio=np.mean(np.sum(np.abs(self.position),axis=1))
+        ### 테스트 기간동안의 일일 최대 투자비중(gross 투자 비중)
+        max_invest_ratio=np.max(np.sum(np.abs(self.position),axis=1))
+        print(f"최종 누적수익률: {rtn*100}%")
+        print(f"수익률/평균투자비중: {rtn/mean_invest_ratio}")
+        print(f"수익률/최대투자비중: {rtn/max_invest_ratio}")
+        print(f"연환산수익률/평균투자비중: {rtn_annualy/mean_invest_ratio}")
+        self.result=pd.DataFrame(data=self.simple_result,index=self.date_index)
+        fig=px.line(self.result)
+        fig.show()
         
         
-    
-    def mkt_regression(self,portfolio):
-        if self.bm != None:
-            X=sm.add_constant(portfolio['return'])
-            y=portfolio['bm']
-            result=sm.OLS(y,X).fit()
-            print(result.summary())
-        else: pass
 
 
 
