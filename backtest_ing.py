@@ -17,7 +17,7 @@ class simple_backtset():
         self.temp_data=data.loc[(data['date']>=self.start)&(data['date']<=self.end)]
         self.fee=fee
 
-    def restrict_mkt(self,top=500):
+    def restrict_cap(self,top=500):
         self.temp_data=self.temp_data.set_index(['date'])
         self.temp_data['mkt_rank']=np.nan
         for ind in sorted(list(set(self.temp_data.index))):
