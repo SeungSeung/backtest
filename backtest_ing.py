@@ -4,7 +4,7 @@ import scipy as sp
 from numba import njit
 import datetime
 import plotly.express as px
-
+from tqdm import tqdm
 
 
 
@@ -147,7 +147,7 @@ class simple_backtset():
                 
         
         t=1
-        for factor, cond in cond.items():
+        for factor, cond in tqdm(cond.items()):
             factor=f"{factor}"
             upper_cond=cond[0]
             lower_cond=cond[1]
