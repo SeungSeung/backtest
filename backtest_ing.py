@@ -17,6 +17,92 @@ class simple_backtset():
         self.temp_data=data.loc[(data['date']>=self.start)&(data['date']<=self.end)]
         self.fee=fee
 
+    def mean_stock_movement(self,signal_num, end_date,factor_name,minus_end_date=0,mean_only=False,lagging=1):
+        try:
+            data=data.rename(columns={"adj_close":'price'})
+        except Exception as e:
+            pass
+        # universe=set(new_sue.reset_index()['level_1'])
+    
+        
+        ###외부상장 종목 제거
+        backtest_data=self.temp_data.loc[(self.temp_data['market']!='외감') & (self.temp_data['market']!='KONEX')]
+        ###거래정지 종목 제거
+        backtest_data=backtest_data.loc[backtest_data['trading_suspension']!=1]
+        ##상장종목 0인거 제거
+        backtest_data['listed_stocks'].fillna(0,inplace=True)
+        backtest_data=backtest_data.loc[backtest_data['listed_stocks']!=0]
+    
+        backtest_data['position']=np.where(backtest_data[factor_name]>signal_num,1,0)
+    
+        close=pd.pivot_table(backtest_data[['date','code','price']],index='date',values='price',columns=['code'],aggfunc='first',dropna=False)
+        #market_cap=pd.pivot_table(backtest_data[['date','code','market_cap']],index='date',values='market_cap',columns=['code'],aggfunc='first')
+        #position=pd.pivot_table(backtest_data[['date','code','position']],index='date',values='position',columns=['code'],aggfunc='first')
+    
+        #universe=set(universe).intersection(set(backtest_data['code']))
+        position=backtest_data.loc[backtest_data['position']==1]
+        universe=list(set(position['code']))
+        close = close.loc[:,~close.columns.duplicated()].copy()
+        key_df=pd.pivot_table(backtest_data[['date','code','position']],index='date',values='position',columns=['code'],aggfunc='first',dropna=True)
+        #position=pd.pivot_table(position[['date','code','position']],index='date',values='position',columns=['code'],aggfunc='first')
+    
+        rtn=close.pct_change()
+        rtn=rtn.iloc[1:]
+        rtn=rtn[universe]
+        key_df=key_df.shift(lagging)
+        key_df=key_df.iloc[lagging:]
+    
+    
+    
+        ###평균적인 주가의 흐름을 보자
+    
+        rtn_index=list(rtn.index)
+        keys=[(index,code)  for index in key_df.index[1:] for code in universe if (key_df.loc[index,code]>=1) and (rtn_index.index(index)>=np.abs(minus_end_date)) and  (  (rtn_index.index(rtn_index[-1])-rtn_index.index(index)) > end_date)]
+    
+    
+        index=[f't{i}' for i in range(minus_end_date,end_date)]
+        mean_flow=pd.DataFrame(index=index, columns=set([i[1] for i in keys]))
+    
+        #rtn_index=list(rtn.index)
+    
+        #keys=[(key[0],key[1]) for key in keys if (rtn_index.index(key[0])>=np.abs(minus_end_date)) and  (  (rtn_index.index(rtn_index[-1])-rtn_index.index(key[0])) > end_date)]
+    
+        for key in tqdm(keys):
+            
+    
+            try:
+                mean_flow.loc['t0':f't{end_date-1}',key[1]]=rtn.loc[rtn_index[rtn_index.index(key[0]):rtn_index.index(key[0])+end_date],key[1]].values
+            except Exception as e:
+                mean_flow.loc['t0':f't{end_date-1}',key[1]]=rtn.loc[rtn_index[rtn_index.index(key[0]):rtn_index.index(key[0])+end_date],key[1]].fillna(method='ffill').values
+            
+            
+    
+            if rtn_index.index(key[0])+minus_end_date>0:
+                try:
+                    mean_flow.loc[f't{minus_end_date}':'t-1',key[1]]=rtn.loc[rtn_index[rtn_index.index(key[0])+minus_end_date:rtn_index.index(key[0])],key[1]].values
+                except Exception as e:
+                    mean_flow.loc[f't{minus_end_date}':'t-1',key[1]]=rtn.loc[rtn_index[rtn_index.index(key[0])+minus_end_date:rtn_index.index(key[0])],key[1]].fillna(method='ffill').value
+                    
+    
+    
+    
+    
+        #mkt=[market_cap.loc[date,code] for date,code in keys]
+        mean_flow.dropna(axis=1,how='all',inplace=True)
+        mean_flow['mean']=mean_flow.iloc[:,:-1].mean(axis=1,skipna=True)
+        if mean_only==False:
+            self.mean_flow=mean_flow
+            fig=px.line((1+mean_flow.fillna(0)).cumprod()-(1+mean_flow.loc[:'t0']).cumprod().loc['t0'])
+            fig.show()
+        else:
+            mean_flow=mean_flow['mean']
+            self.mean_flow=mean_flow
+            fig=px.line((1+mean_flow.fillna(0)).cumprod()-(1+mean_flow.loc[:'t0']).cumprod().loc['t0'])
+            fig.show()
+            return mean_flow
+        
+    
+
     def restrict_cap(self,top=500):
         self.temp_data=self.temp_data.set_index(['date'])
         self.temp_data['mkt_rank']=np.nan
