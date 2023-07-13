@@ -192,11 +192,11 @@ class simple_backtset():
             
            
             ####각각의 진입 시기만 남기기 
-            if (lower_cond is not None) & (upper_cond is not None):
+            if (lower_cond is not None) & (upper_cond is not None)&(holding_days!=None):
                      
                 sign_idx = np.where((self.temp_data[factor] >= lower_cond) & (self.temp_data[factor]< upper_cond),invest_ratio*position,0)
                         
-            elif lower_cond is not None:
+            elif (lower_cond is not None) & (holding_days!=None):
                 
             
                 if (type(lower_cond) == int) | (type(lower_cond) == float):
@@ -205,17 +205,25 @@ class simple_backtset():
                     print("Lower Condition Error")
                     sign_idx = None
                 
-            elif upper_cond is not None:
+            elif (upper_cond is not None) &(holding_days!=None):
                     
                 if (type(upper_cond) == int) | (type(upper_cond) == float):
                     sign_idx = np.where((self.temp_data[factor] < upper_cond),invest_ratio*position,0)
                 else:
                     print("Higher Condition Error")
                     sign_idx = None
+            
+            elif (lower_cond is not None) & (upper_cond is not None)&(holding_days==None): ### 내부에서 진입 청산 자체적으로 진행
+                sign_idx = np.where((self.temp_data[factor] >= lower_cond) | (self.temp_data[factor]< upper_cond),invest_ratio*position,0)    
+                
+                
                 
             else:
                 print("No Condition")
                 sign_idx = None
+                
+                
+            
 
             self.temp_data[f'factor_{t}']=sign_idx
             
@@ -229,6 +237,13 @@ class simple_backtset():
                 self.temp_data[f'factor_{t}'].fillna(0,inplace=True)
                 self.temp_data[f'factor_{t}_clear'].fillna(0,inplace=True)
                 self.temp_data[f'pos_{t}']=self.temp_data[f'factor_{t}']+self.temp_data[f'factor_{t}_clear']
+                
+                
+                
+                
+            elif holding_days==None:
+                self.temp_data[f'pos_{t}']=self.temp_data[f'factor_{t}']
+             
             
             ### 보유기간이 진입 후 한달, 3개월, 6개월, 1년인 경우
             else:
@@ -249,6 +264,7 @@ class simple_backtset():
         
         factor_list=[col for col in self.temp_data.columns if col.startswith('pos')]
         ###멅티전략 포지션 array 합치기, 상계처리
+        self.temp_data[factor_list].fillna(0,inplace=True)
         self.temp_data['position']=np.nansum(self.temp_data[factor_list],axis=1)
             
             
