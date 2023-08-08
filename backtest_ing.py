@@ -19,14 +19,14 @@ class simple_backtset():
 
     def mean_stock_movement(self,signal_num, end_date,factor_name,minus_end_date=0,mean_only=False,lagging=1):
         try:
-            data=data.rename(columns={"adj_close":'price'})
+            data=self.temp_data.rename(columns={"adj_close":'price'})
         except Exception as e:
             pass
         # universe=set(new_sue.reset_index()['level_1'])
     
         
         ###외부상장 종목 제거
-        backtest_data=self.temp_data.loc[(self.temp_data['market']!='외감') & (self.temp_data['market']!='KONEX')]
+        backtest_data=data.loc[(self.temp_data['market']!='외감') & (data['market']!='KONEX')]
         ###거래정지 종목 제거
         backtest_data=backtest_data.loc[backtest_data['trading_suspension']!=1]
         ##상장종목 0인거 제거
