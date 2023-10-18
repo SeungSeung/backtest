@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 
 
-class simple_backtset():
+class simple_backtest():
     def __init__(self, data,start,end,fee=0.005):
         
         self.start=pd.to_datetime(start)
@@ -19,14 +19,14 @@ class simple_backtset():
 
     def mean_stock_movement(self,signal_num, end_date,factor_name,minus_end_date=0,mean_only=False,lagging=1):
         try:
-            data=self.temp_data.rename(columns={"adj_close":'price'})
+            data=data.rename(columns={"adj_close":'price'})
         except Exception as e:
             pass
         # universe=set(new_sue.reset_index()['level_1'])
     
         
         ###외부상장 종목 제거
-        backtest_data=data.loc[(self.temp_data['market']!='외감') & (data['market']!='KONEX')]
+        backtest_data=self.temp_data.loc[(self.temp_data['market']!='외감') & (self.temp_data['market']!='KONEX')]
         ###거래정지 종목 제거
         backtest_data=backtest_data.loc[backtest_data['trading_suspension']!=1]
         ##상장종목 0인거 제거
@@ -35,7 +35,7 @@ class simple_backtset():
     
         backtest_data['position']=np.where(backtest_data[factor_name]>signal_num,1,0)
     
-        close=pd.pivot_table(backtest_data[['date','code','price']],index='date',values='price',columns=['code'],aggfunc='first',dropna=False)
+        close=pd.pivot_table(backtest_data[['date','code','adj_close']],index='date',values='adj_close',columns=['code'],aggfunc='first',dropna=False)
         #market_cap=pd.pivot_table(backtest_data[['date','code','market_cap']],index='date',values='market_cap',columns=['code'],aggfunc='first')
         #position=pd.pivot_table(backtest_data[['date','code','position']],index='date',values='position',columns=['code'],aggfunc='first')
     
@@ -301,7 +301,7 @@ class simple_backtset():
         
         
         
-    @njit()
+    #@njit()
     def simulation(self,fee=0.005,nav=1):
   
         
