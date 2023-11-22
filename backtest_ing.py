@@ -302,22 +302,22 @@ class simple_backtest():
         
         
     #@njit()
-    def simulation(self,fee=0.005,nav=1):
+    def simulation(self,nav=1):
   
-        
+    
         nav_signal=self.position.copy()
         position_signal=self.position.copy()
         #fee_matrix=np.diff(position_signal,axis=1)*fee
 
         #nav_signal=nav_signal-(fee_matrix*np.sign(nav_signal))
         nav_result=[np.float(nav)]
-        for i in range(len(position_signal)-1):    
-            nav_signal[i+1]+=np.abs(nav_signal[i])*self.daily_rtn[i]-np.nansum(np.abs(self.fee_matrix[i]))
-            nav+=np.nansum(nav_signal[i]*self.daily_rtn[i])-np.nansum(np.abs(self.fee_matrix[i]))
-            #print(np.nansum(nav_signal.iloc[i].fillna(0)*daily_rtn.iloc[i]))
-            nav_result.append(nav)
+        first=nav_signal[:,0]*self.daily_rtn[:,0]-np.abs(np.nan_to_num(self.fee_matrix[:,0]))
+        for i in range(1,self.position.shape[1]):    
+            first+=(nav_signal[:,i]*self.daily_rtn[:,i]-np.abs(np.nan_to_num(self.fee_matrix[:,i])))
+        
+        nav_result=(np.nan_to_num(first)+1).cumprod()
         self.simple_result=nav_result
-            
+        
 
         return self.simple_result
     
